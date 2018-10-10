@@ -1,5 +1,5 @@
 from exceptions import UnknownOpCodeException
-from keychecker import KEY_MAPPINGS
+from keyboard import KEY_MAPPINGS
 
 from pygame import key
 
@@ -60,6 +60,7 @@ class architecture:
             0x0: self.SYS,                       # 0NNN - SYS  NNN             (CLEAR, RETURN)
             0x1: self.JMP_ADDR,                    # 1NNN - JUMP NNN           (JUMP TO ADDRESS)
             0x2: self.JMP_SBR,                     # 2NNN - CALL NNN           (JUMP TO SUBROUTINE)
+            0x3: self.SKIP_REG_E_VAL,              # 3SNN - SKNE VS, NN        (SKIP IF VS == NN)
             0x4: self.SKIP_REG_NE_VAL,             # 4SNN - SKNE VS, NN        (SKIP IF VS != NN)
             0x5: self.SKIP_REG_E_REG,              # 5ST0 - SKE  VS, VT        (SKIP IF VS == VT)
             0x6: self.LD_VAL_REG,                  # 6SNN - LOAD VS, NN        (LOAD NN INTO VS)
@@ -84,8 +85,8 @@ class architecture:
             0x4: self.ADD_REG_REG,                 # 8ST4 - ADD  VS, VT   (ADD VT TO VS)
             0x5: self.SUB_REG_REG,                 # 8ST5 - SUB  VS, VT   (VS = VS - VT)
             0x6: self.R_SHFT_REG,                  # 8SN6 - SHR  VS       (RIGHT SHIFT VS)
-            0x7: self.CLR_REG,                     # 8ST7 - SUBN VT, VT   (VS = VT - VS)
-            0xE: self.L_SFT_REG,                   # 8SNE - SHL  VS       ( LEFT SHIFT VS)
+            0x7: self.SUBN_REG_REG,                # 8ST7 - SUBN VT, VT   (VS = VT - VS)
+            0xE: self.L_SHFT_REG,                  # 8SNE - SHL  VS       ( LEFT SHIFT VS)
         }
 
         #  As defined above, self.MSC get called when 0xFNNN is loaded into the CPU
@@ -264,7 +265,6 @@ class architecture:
 
         self.CpuRegisters['PC'] = self.CurrentOperand & 0x0FFF
 
-
     def JMP_SBR(self):
         """
         Jump instruction to subroutine. Save the current program counter on the stack,
@@ -273,3 +273,184 @@ class architecture:
         0x2NNN - CALL NNN Subroutine
         """
 
+        self.memory[self.CpuRegisters['SP']] = self.CpuRegisters['PC'] & 0x00FF
+        self.CpuRegisters['SP'] += 1
+        self.memory[self.CpuRegisters['SP']] = (self.CpuRegisters['PC'] & 0xFF00) >> 8
+        self.CpuRegisters['SP'] += 1
+        self.CpuRegisters['PC'] = self.CurrentOperand & 0x0FFF
+
+    def SKIP_REG_E_VAL(self):
+        """
+        Triggered by 0x3SNN = SKIP IF REGISTER VS == NN
+        """
+
+        # Pull value for register out
+        register = (self.CurrentOperand & 0x0F00) >> 8
+
+        if self.GeneralRegisters[register] == self.CurrentOperand & 0x00FF:
+            self.CpuRegisters['PC'] += 2
+
+    def SKIP_REG_NE_VAL(self):
+        """
+        Triggered by 0x4SNN = SKIP IF REGISTER VS != NN
+        """
+
+        # Pull value for register out
+        register = (self.CurrentOperand & 0x0F00) >> 8
+
+        if self.GeneralRegisters[register] != self.CurrentOperand & 0x00FF:
+            self.CpuRegisters['PC'] += 2
+
+    def SKIP_REG_E_REG(self):
+        """
+        Triggered by 0x5ST0 = SKIP IF REGISTER VS == VT
+        """
+
+        register1 = (self.CurrentOperand & 0x0F00) >> 8
+        register2 = (self.CurrentOperand & 0x00F0) >> 4
+
+        if self.GeneralRegisters[register1] == self.GeneralRegisters[regsiter2]:
+            self.CpuRegisters['PC'] += 2
+
+    def SKIP_REG_NE_REG(self):
+        """
+        Triggered by 0x9ST0 = SKIP IF REGISTER VS != VT
+        """
+
+        register1 = (self.CurrentOperand & 0x0F00) >> 8
+        register2 = (self.CurrentOperand & 0x00F0) >> 4
+
+        if self.GeneralRegisters[register1] != self.GeneralRegisters[regsiter2]:
+            self.CpuRegisters['PC'] += 2
+
+    def LD_VAL_REG(self):
+        """
+        Triggered by 0x6SNN = LOAD NN into VS
+        """
+
+        value = self.CurrentOperand & 0x00FF
+        register = (self.CurrentOperand & 0x0F00) >> 8
+
+        self.GeneralRegisters[register] = value
+
+    def ADD_VAL_REG(self):
+        """
+        Triggered by 0x7SNN = VS = [VS] + NN
+        We need to be careful of overflow as well
+        """
+
+        value = self.CurrentOperand & 0x00FF
+        register = (self.CurrentOperand & 0x0F00) >> 8
+        added_value = self.GeneralRegisters[register] + value
+        self.GeneralRegisters[register] = added_value if added_value < 256 else added_value - 256
+
+    def LD_REG_REG(self):
+        """
+        PART OF ELI: Triggered by 0x8ST0 = VS = [VT]
+        """
+
+        register1 = (self.CurrentOperand & 0x0F00) >> 8
+        register2 = (self.CurrentOperand & 0x00F0) >> 4
+        self.GeneralRegisters[register1] = self.GeneralRegisters[register2]
+
+    def ADD_REG_REG(self):
+        """
+        PART OF ELI: Triggered by 0x8ST4 = VS = VS + [VT]
+        If carry is generated, we need to set the carry flag in VF (hardcoded)
+        """
+
+        register1 = (self.CurrentOperand & 0x0F00) >> 8
+        register2 = (self.CurrentOperand & 0x00F0) >> 4
+
+        added_value = self.GeneralRegisters[register1] + self.GeneralRegisters[register2]
+
+        if added_value > 255:
+            self.GeneralRegisters[register1] = added_value - 256
+            self.GeneralRegisters[0xF] = 1
+        else:
+            self.GeneralRegisters[register1] = added_value
+            self.GeneralRegisters[0xF] = 0
+
+    def SUB_REG_REG(self):
+        """
+        PART OF ELI: Triggered by 0x8ST5 = VS = [VS] - [VT]
+
+        Need to set the carry flag in VF (hardcoded) if a borrow is not generated
+        """
+        register1 = (self.CurrentOperand & 0x0F00) >> 8
+        register2 = (self.CurrentOperand & 0x00F0) >> 4
+
+        if self.GeneralRegisters[register1] > self.GeneralRegisters[register2]:
+            self.GeneralRegisters[register1] -= self.GeneralRegisters[register2]
+            self.GeneralRegisters[0xF] = 1
+        else:
+            self.GeneralRegisters[register1] = 256 + self.GeneralRegisters[register1] - self.GeneralRegisters[register2]
+            self.GeneralRegisters[0xF] = 0
+
+    def SUBN_REG_REG(self):
+        """
+        PART OF ELI: Triggered by 0x8ST7 = VS = [VT] - [VS]
+
+        Need to set the carry flag in VF (hardcoded) if a borrow is not generated
+        """
+        register1 = (self.CurrentOperand & 0x0F00) >> 8
+        register2 = (self.CurrentOperand & 0x00F0) >> 4
+
+        if self.GeneralRegisters[register1] < self.GeneralRegisters[register2]:
+            self.GeneralRegisters[register1] = self.GeneralRegisters[register2] - self.GeneralRegisters[register1]
+            self.GeneralRegisters[0xF] = 1
+        else:
+            self.GeneralRegisters[register1] = 256 + self.GeneralRegisters[register2] - self.GeneralRegisters[register1]
+            self.GeneralRegisters[0xF] = 0
+
+    def OR(self):
+        """
+        PART OF ELI: Triggered by 0x8ST1 = VS = VS | VT
+        """
+
+        register1 = (self.CurrentOperand & 0x0F00) >> 8
+        register2 = (self.CurrentOperand & 0x00F0) >> 4
+
+        self.GeneralRegisters[register1] |= self.GeneralRegisters[register2]
+
+    def AND(self):
+        """
+        PART OF ELI: Triggered by 0x8ST2 = VS = VS & VT
+        """
+
+        register1 = (self.CurrentOperand & 0x0F00) >> 8
+        register2 = (self.CurrentOperand & 0x00F0) >> 4
+
+        self.GeneralRegisters[register1] &= self.GeneralRegisters[register2]
+
+    def XOR(self):
+        """
+        PART OF ELI: Triggered by 0x8ST3 = VS = VS ^ VT
+        """
+
+        register1 = (self.CurrentOperand & 0x0F00) >> 8
+        register2 = (self.CurrentOperand & 0x00F0) >> 4
+
+        self.GeneralRegisters[register1] ^= self.GeneralRegisters[register2]
+
+    def R_SHFT_REG(self):
+        """
+        PART OF ELI: Triggered by 0x8S06 = VS = VS >> 1 and VF = VS[0] & 0x1 (bit 0 not byte 0)
+        """
+
+        register = (self.CurrentOperand & 0x0F00) >> 8
+
+        self.GeneralRegisters[0xF] = self.GeneralRegisters[register] & 0x1
+        self.GeneralRegisters[register] = self.GeneralRegisters[register] >> 1
+
+    def L_SHFT_REG(self):
+        """
+        PART OF ELI: Triggered by 0x8S0E = VS = VS << 1 and VF = VS[7] & 0x80 (bit 7 not byte 7)
+        """
+
+        register = (self.CurrentOperand & 0x0F00) >> 8
+
+        self.GeneralRegisters[0xF] = (self.GeneralRegisters[register] & 0x80) >> 8
+        self.GeneralRegisters[register] = self.GeneralRegisters[register] << 1
+
+    
