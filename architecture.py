@@ -1,13 +1,20 @@
 from exceptions import UnknownOpCodeException
 from keyboard import KEY_MAPPINGS
+from screen import Screen
 
+import pygame
 from pygame import key
+from random import randint
 
-class architecture:
+class Architecture:
     # Constants:
     MAX_MEMORY = 4096
+    PROGRAM_COUNTER_START = 0x200
+    STACK_POINTER_START = 0x52
+    NORMAL = 'normal'
+    EXTENDED = 'extended'
 
-    def __init__(self):
+    def __init__(self, scale):
 
         # The CHIP-8 had 4k (4096 bytes) of memory
         self.memory = bytearray(self.MAX_MEMORY)
@@ -45,7 +52,7 @@ class architecture:
             'I' : 0,
             'SP': 0,
             'PC': 0,
-            'RPL': bytearray(self.MAX_MEMORY)
+            'RPL': bytearray(16)
         }
 
         self.Timers = {
@@ -69,8 +76,8 @@ class architecture:
             0x9: self.SKIP_REG_NE_REG,             # 9ST0 - SKNE VS, VT        (SKIP IF VS != VT)
             0xA: self.LD_I_VAL,                    # ANNN - LOAD I, NNN        (LOAD NNN INTO I)
             0xB: self.JMP_I_VAL,                   # BNNN - JUMP [I] + NNN     (JUMP TO [I] + NNN)
-            0xC: self.RND_REG,                     # CTNN - RAND VT, NN        (LOAD RANDOM NUMBER INTO VT WITH SEED NN)
-            0xD: self.DRAW,                        # DSTN - DRAW VS, VT, N     (DRAW INTO VS, VT VALUE N)
+            0xC: self.RND_REG,                     # CTNN - RAND VT, NN        (LOAD RANDOM NUMBER INTO VT AFTER AND WITH NN)
+            0xD: self.DRAW,                        # DSTN - DRAW VS, VT, N     (DRAW INTO VS, VT VALUE N USING SPRITE IN I)
             0xE: self.KBRD,                        # SUBFUNCTION DEFINED BELOW (Keyboard Routine)
             0xF: self.MSC,                         # SUBFUNCTION DEFINED BELOW (Miscellaneous Routine)
         }
@@ -102,20 +109,38 @@ class architecture:
             0x33: self.STR_BCD_MEM,                 # FS33 - BCD            (STORE BINARY CODED DECIMAL IN VS INTO MEMORY)
             0x55: self.STR_REG_MEM,                 # FS55 - STOR [I], VS   (STORE V0 to VX INTO MEMORY[I])
             0x65: self.LD_REG_MEM,                  # FS65 - LOAD VS, [I]   (LOAD V0 to VX FROM MEMORY[I])
-            0x75: self.STR_REG_RPL,                 # FS75 - SRPL VS        (STORE VS INTO RPL)
-            0x85: self.LD_REG_RPS,                  # FS85 - LRPL VS        (LOAD VS FROM RPL)
+            0x75: self.STR_REG_RPL,                 # FS75 - SRPL VS        (STORE V0 - VS INTO RPL)
+            0x85: self.LD_REG_RPL,                  # FS85 - LRPL VS        (LOAD V0 - VS FROM RPL)
         }
 
         # Settings the current operand 
         self.CurrentOperand = 0
 
-        # TODO: Create a screen class
-        self.screen = None
+        # Create and initialize screen class
+        self.screen = Screen(SCALE=scale)
 
-        # TODO: Create a reset function
-        self.reset()
+        # Setting default operating mode
+        self.MODE = self.NORMAL
 
-    def EXECUTE(SELF, OPERAND=None):
+        # Reset memory function
+        self.RESET()
+
+    # def __str__(self):
+    #     val = 'PC: {:4X}  OP: {:4X}\n'.format(self.CpuRegisters['PC'] - 2, self.CurrentOperand)
+    #     for index in range(16):
+    #         val += 'V{:X}: {:2X}\n'.format(index, self.GeneralRegisters[index])
+    #     val += 'I: {:4X}\n'.format(self.CpuRegisters['I'])
+    #     return val
+
+    def LOAD_ROMFILE(self, filename, offset=PROGRAM_COUNTER_START):
+        """
+        Load the ROM indicated by the filename into memory.
+        """
+        ROM = open(filename, 'rb').read()
+        for index, value in enumerate(ROM):
+            self.memory[offset + index] = value
+
+    def EXECUTE(self, OPERAND=None):
         """
         Execute the current instruction from the OPERAND parameter
         or the value at self.memory([PC])
@@ -132,6 +157,7 @@ class architecture:
             self.CurrentOperand = self.CurrentOperand << 8                  
             self.CurrentOperand += int(self.memory[self.CpuRegisters['PC'] + 1])
             self.CpuRegisters['PC'] += 2
+
         # The operation index being formatted for the lookup table
         OPERATION = (self.CurrentOperand & 0xF000) >> 12
         
@@ -166,7 +192,7 @@ class architecture:
 
         # Formatting operation for lookup table (get first 2 bytes)
         OPERATION = self.CurrentOperand & 0x00FF 
-
+        
         # Getting Key Register from CurrentOperand (get second byte)
         KEY_REGISTER = (self.CurrentOperand & 0x0F00) >> 8
 
@@ -174,15 +200,16 @@ class architecture:
 
         # Get array of all pressed keys
         ALL_PRESSED_KEYS = key.get_pressed()
+        
 
         # Skip if the key specified in the source register is pressed
         if OPERATION == 0x9E:
-            if ALL_PRESSED_KEYS[KEY_MAPPINGS[KEY_TO_CHECK]]:
+            if ALL_PRESSED_KEYS[int(KEY_MAPPINGS[KEY_TO_CHECK])] == 1:
                 self.CpuRegisters['PC'] += 2
 
         # Skip if the key specified in the source register is not pressed
         if OPERATION == 0xA1:
-            if not ALL_PRESSED_KEYS[KEY_MAPPINGS[KEY_TO_CHECK]]:
+            if ALL_PRESSED_KEYS[int(KEY_MAPPINGS[KEY_TO_CHECK])] == 0:
                 self.CpuRegisters['PC'] += 2
 
     def MSC(self):
@@ -219,30 +246,30 @@ class architecture:
         OPERATION = self.CurrentOperand & 0x00FF
         SUB_OPERATION = OPERATION & 0x00F0
 
-        if SUB_OPERATION == 0x00E0:
+        if SUB_OPERATION == 0x00C0:
             SCROLL_PIXELS = self.CurrentOperand & 0x000F
-            self.sceen.scroll_down(SCROLL_PIXELS)
+            self.screen.SCROLL_DOWN(SCROLL_PIXELS)
 
         if OPERATION == 0x00E0:
-            self.screen.clear_screen()
+            self.screen.CLEAR()
 
         if OPERATION == 0x00EE:
             self.RETURN()
 
         if OPERATION == 0x00FB:
-            self.screen.scroll_right()
+            self.screen.SCROLL_RIGHT()
 
         if OPERATION == 0x00FC:
-            self.screen.scroll_left()
+            self.screen.SCROLL_LEFT()
 
         if OPERATION == 0x00FD:
             pass
 
         if OPERATION == 0x00FE:
-            self.disable_extended_mode()
+            self.DISABLE_EXT()
 
-        if operation == 0x00FF:
-            self.enable_extended_mode()
+        if OPERATION == 0x00FF:
+            self.ENABLE_EXT()
 
     def RETURN(self):
         """
@@ -320,7 +347,7 @@ class architecture:
         register1 = (self.CurrentOperand & 0x0F00) >> 8
         register2 = (self.CurrentOperand & 0x00F0) >> 4
 
-        if self.GeneralRegisters[register1] != self.GeneralRegisters[regsiter2]:
+        if self.GeneralRegisters[register1] != self.GeneralRegisters[register2]:
             self.CpuRegisters['PC'] += 2
 
     def LD_VAL_REG(self):
@@ -453,4 +480,318 @@ class architecture:
         self.GeneralRegisters[0xF] = (self.GeneralRegisters[register] & 0x80) >> 8
         self.GeneralRegisters[register] = self.GeneralRegisters[register] << 1
 
+    def LD_I_VAL(self):
+        """
+        Triggered by 0xANNN = LOAD NNN into I
+        """
+
+        self.CpuRegisters['I'] = self.CurrentOperand & 0x0FFF
+
+    def JMP_I_VAL(self):
+        """
+        Triggered by 0xBNNN = JUMP to [I] + NNN
+        """
+
+        self.CpuRegisters['PC'] = self.CpuRegisters['I'] + (self.CurrentOperand & 0x0FFF)
     
+    def RND_REG(self):
+        """
+        Triggered by 0xCSNN = Generate a random number, AND it with NN and save in VS
+        Random number must be between 0 and 255
+        """
+
+        value = self.CurrentOperand & 0x00FF
+        register = (self.CurrentOperand & 0x0F00) >> 8
+
+        self.GeneralRegisters[register] = value & randint(0, 255)
+
+    def LD_DT_REG(self):
+        """
+        PART OF MSC - Triggered by 0xFS07 = LOAD DT INTO VT
+        """
+
+        register = (self.CurrentOperand & 0x0F00) >> 8
+
+        self.GeneralRegisters[register] = self.Timers['DT']
+
+    def WAIT_KEYPRESS(self):
+        """
+        PART OF MSC - Triggerd by 0xFS0A = WAIT FOR KEYPRESS, STORE KEYPRESS INTO VS
+        """
+
+        register = (self.CurrentOperand & 0x0F00) >> 8
+
+        key_pressed = False
+        while not key_pressed:
+            event = pygame.event.wait()
+            if event.type == pygame.KEYDOWN:
+                all_keys_down = key.get_pressed()
+                if all_keys_down[pygame.K_q]:
+                    self.CurrentOperand = 0x00FD
+                    key_pressed = True
+                    break
+                for keyval, lookup_key in KEY_MAPPINGS.items():
+                    if all_keys_down[lookup_key]:
+                        self.GeneralRegisters[register] = keyval
+                        key_pressed = True
+                        break
+    
+    def LD_REG_DT(self):
+        """
+        PART OF MSC - Triggered by 0xFS15 = LOAD VS INTO DT
+        """
+
+        register = (self.CurrentOperand & 0x0F00) >> 8
+
+        self.Timers['DT'] = self.GeneralRegisters[register]
+
+    def LD_REG_ST(self):
+        """
+        PART OF MSC - Triggered by 0xFS18 = LOAD VS INTO ST
+        """
+
+        register = (self.CurrentOperand & 0x0F00) >> 8
+
+        self.Timers['ST'] = self.GeneralRegisters[register]
+
+    def LD_I_REG(self):
+        """
+        PART OF MSC - Triggered by 0xFS29 = LOAD VS INTO I
+        We multiply by 5 to shift the register value into a SPRITE CODE
+        All Sprite codes are 5 bytes long, so the location of the sprite is index*5
+        """
+
+        register = (self.CurrentOperand & 0x0F00) >> 8
+
+        self.CpuRegisters['I'] = self.GeneralRegisters[register] * 5
+
+    def LD_EXT_I_REG(self):
+        """
+        PART OF MSC - Triggered by 0xFS30 = LOAD VS INTO I
+        We multiply by 10 to shift the register value into a SPRITE CODE
+        All Sprite codes are 10 bytes long, so the location of the sprite is index*10
+        """
+
+        register = (self.CurrentOperand & 0x0F00) >> 8
+
+        self.CpuRegisters['I'] = self.GeneralRegisters[register] * 10
+
+    def ADD_REG_I(self):
+        """
+        PART OF MSC - Triggered by 0xFT1E = I = [VT] + [I]
+        """
+
+        register = (self.CurrentOperand & 0x0F00) >> 8
+
+        self.CpuRegisters['I'] += self.GeneralRegisters[register]
+
+    def STR_BCD_MEM(self):
+        """
+        PART OF MSC - Triggered by 0xFT33 = TAKE Value in VT and place as follow into memory:
+        
+            N*10^2 = self.memory[i]
+            N*10^1 = self.memory[i+1]
+            N*10^0 = self.memory[i+2]
+
+        """
+
+        register = (self.CurrentOperand & 0x0F00) >> 8
+        binary_value = '{:03d}'.format(self.GeneralRegisters[register])
+
+        self.memory[self.CpuRegisters['I']] = int(binary_value[0])
+        self.memory[self.CpuRegisters['I'] + 1] = int(binary_value[1])
+        self.memory[self.CpuRegisters['I'] + 2] = int(binary_value[2])
+
+    def STR_REG_MEM(self):
+        """
+        PART OF MSC - Triggered by 0xFT55 = STORE V0-VT INTO MEMORY AT [I] 
+        """
+
+        register = (self.CurrentOperand & 0x0F00) >> 8
+
+        for i in range(register + 1):
+            self.memory[self.CpuRegisters['I'] + i] = self.GeneralRegisters[i]
+
+    def LD_REG_MEM(self):
+        """
+        PART OF MSC - Triggered by 0xFST65 = LOAD V0-VT FROM MEMORY AT [I]
+        """
+
+        register = (self.CurrentOperand & 0x0F00) >> 8
+
+        for i in range(register + 1):
+            self.GeneralRegisters[i] = self.memory[self.CpuRegisters['I'] + i]
+
+    def STR_REG_RPL(self):
+        """
+        PART OF MSC - Triggered by 0xFT75 = STORE V0 - VT INTO RPL
+        """
+
+        register = (self.CurrentOperand & 0x0F00) >> 8
+
+        for i in range(register + 1):
+            self.CpuRegisters['RPL'][i] = self.GeneralRegisters[i]
+
+    def LD_REG_RPL(self):
+        """
+        PART OF MSC - Triggered by 0xFT85 = LOAD V0 - VT FROM RPL
+        """
+
+        register = (self.CurrentOperand & 0x0F00) >> 8
+
+        for i in range(register + 1):
+            self.GeneralRegisters[i] = self.CpuRegisters['RPL'][i]
+
+    def DRAW(self):
+        """
+        The draw method for actually drawing output to the screen
+        Triggered by DSTN - DRAW VS, VT, N
+
+        Works by checking what sprite is saved in the index register ([I])
+        at the x and y coordinates, where x = [VS], = [VT].
+
+        The drawing works by XORing the individual pixels and wrapping if we go off page
+        The N value is used to define the height of the sprite and the width is 
+        hardcoded to be 8-bits
+
+        Since the index register points to memory, say the memory looks like this:
+
+        self.memory[0]:     0 1 1 1 1 1 0 0
+        self.memory[1]:     0 1 0 0 0 0 0 0
+        self.memory[2]:     0 1 0 0 0 0 0 0
+        self.memory[3]:     0 1 1 1 1 1 0 0
+        self.memory[4]:     0 1 0 0 0 0 0 0
+        self.memory[5]:     0 1 0 0 0 0 0 0
+        self.memory[6]:     0 1 1 1 1 1 0 0
+
+        where the 1's form the shape of an E, then having the index point to self.memory[0
+        and N as 7 would tell the emulator to draw the E by iterating from 0-6 in the memory
+        """
+
+        register_x = (self.CurrentOperand & 0x0F00) >> 8
+        register_y = (self.CurrentOperand & 0x00F0) >> 4
+
+        x = self.GeneralRegisters[register_x]
+        y = self.GeneralRegisters[register_y]
+
+        height = self.CurrentOperand & 0x000F
+
+        self.GeneralRegisters[0xF] = 0
+
+        if self.MODE == self.EXTENDED and height == 0:
+            self.DRAW_EXT(x, y, 16)
+        else:
+            self.DRAW_NORM(x, y, height)
+
+    def DRAW_NORM(self, x, y, height):
+        """
+        Called by draw function in normal mode
+        """
+
+        for y_layer in range(height):
+
+            pixel_array = bin(self.memory[self.CpuRegisters['I'] + y_layer])
+            pixel_array = pixel_array[2:].zfill(8)
+
+            y_coordinate = (y + y_layer) % self.screen.HEIGHT
+
+            for x_layer in range(8):
+
+                x_coordinate = (x + x_layer) % self.screen.WIDTH
+                new_state = int(pixel_array[x_layer])
+
+                current_state = self.screen.GET_STATE(x_coordinate, y_coordinate)
+
+                if current_state == 1 and new_state == 1:
+                    self.GeneralRegisters[0xF] = self.GeneralRegisters[0xF] | 1
+                    new_state = 0
+                elif new_state == 0 and current_state == 1:
+                    self.GeneralRegisters[0xF] = self.GeneralRegisters[0xF] | 0
+                    new_state = 1
+
+                self.screen.DRAW(x_coordinate, y_coordinate, new_state)
+
+        self.screen.UPDATE()
+
+    def DRAW_EXT(self,x, y, height):
+        """
+        Called by draw function in extended mode where sprites are 
+        supposed to be 16 x 16
+        """
+
+        for y_layer in range(height):
+
+            for offset in range(2):
+
+                pixel_array = bin(self.memory[self.CpuRegisters['I'] + (y_layer*2) + offset])
+                pixel_array = pixel_array[2:].zfill(8)
+
+                y_coordinate = (y + y_layer) % self.screen.HEIGHT
+
+                for x_layer in range(8):
+
+                    x_coordinate = (x + x_layer + (offset * 8)) % self.screen.WIDTH
+
+                    new_state = int(pixel_array[x_layer])
+
+                    current_state = self.screen.GET_STATE(x_coordinate, y_coordinate)
+
+                    if current_state == 1 and new_state == 1:
+                        self.GeneralRegisters[0xF] = self.GeneralRegisters[0xF] | 1
+                        new_state = 0
+                    elif new_state == 0 and current_state == 1:
+                        new_state = 1
+
+                    self.screen.DRAW(x_coordinate, y_coordinate, new_state)
+
+        self.screen.UPDATE()
+
+    def RESET(self):
+        """
+        Blanks out registers and resets the stack pointer and PC to initial values
+        """
+        for i in range(16):
+            self.GeneralRegisters[i] = 0
+            self.CpuRegisters['RPL'][i] = 0
+        
+        self.CpuRegisters['PC'] = self.PROGRAM_COUNTER_START
+        self.CpuRegisters['SP'] = self.STACK_POINTER_START
+        self.CpuRegisters['I'] = 0
+        
+        self.Timers['DT'] = 0
+        self.Timers['ST'] = 0
+
+    def ENABLE_EXT(self):
+        """
+        Enables extended mode
+        """
+        self.screen.SET_EXT()
+        self.MODE = self.EXTENDED
+
+    def DISABLE_EXT(self):
+        """
+        Disable extended mode
+        """
+        self.screen.SET_NORM()
+        self.MODE = self.NORMAL
+        
+    # Debug functions
+    def DECREMENT_TIMERS(self):
+        """
+        Decrement both the sound and delay timer.
+        """
+        if self.Timers['DT'] > 0:
+            self.Timers['DT'] -= 1
+
+        if self.Timers['ST'] > 0:
+            self.Timers['ST'] -= 1
+
+    def DUMP_MEMORY(self):
+        """
+        Print the current contents of the memory
+        """
+        i = 0
+        for binary_line in self.memory:
+            if binary_line != 0:
+                print("Index: {}, value: {}".format(i, hex(binary_line)))
+            i += 1
