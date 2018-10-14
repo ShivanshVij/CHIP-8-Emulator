@@ -125,13 +125,6 @@ class Architecture:
         # Reset memory function
         self.RESET()
 
-    # def __str__(self):
-    #     val = 'PC: {:4X}  OP: {:4X}\n'.format(self.CpuRegisters['PC'] - 2, self.CurrentOperand)
-    #     for index in range(16):
-    #         val += 'V{:X}: {:2X}\n'.format(index, self.GeneralRegisters[index])
-    #     val += 'I: {:4X}\n'.format(self.CpuRegisters['I'])
-    #     return val
-
     def LOAD_ROMFILE(self, filename, offset=PROGRAM_COUNTER_START):
         """
         Load the ROM indicated by the filename into memory.

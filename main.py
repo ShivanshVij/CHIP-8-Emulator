@@ -49,4 +49,4 @@ class Emulator:
 
     
 if __name__ == '__main__':
-    emulator = Emulator(rom='c8games\TETRIS', font_file='c8games\\FONTS.chip8', scale=15)
+    emulator = Emulator(rom='c8games\BRIX', font_file='c8games\\FONTS.chip8', scale=15)
